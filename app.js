@@ -4,7 +4,10 @@ const cheerio = require('cheerio')
 const target_url =
   'https://auctions.yahoo.co.jp/search/search?va=%E9%99%B6%E7%A3%81%E5%99%A8&exflg=1&b=1&n=50&s1=bids&o1=a&rc_ng=1&auccat=&tab_ex=commerce&ei=utf-8&aq=-1&oq=&sc_i=&exflg=1&p=%E9%99%B6%E7%A3%81%E5%99%A8&x=32&y=31'
 
-const DATA_PAGE = 300
+const MAX_DATA_PAGE = 300
+const GET_DATA_SWICH = 1
+
+let pageCnt = 1
 
 // 网络请求
 httpGet = async (url) => {
@@ -45,55 +48,66 @@ httpGet(target_url).then((html) => {
 
   // 开始爬取当页数据
   httpListPageData(html)
-
-  // 开始爬取其他页数据
-  const $ = cheerio.load(html)
-  const pages = $('.Pager .Pager__lists .Pager__list a')
-  pages.each(function (i, p) {
-    if (i < DATA_PAGE) {
-      const hrefURL = $(this).attr('href')
-      if (hrefURL) {
-        console.log(hrefURL);
-        // httpGet(hrefURL).then((html) => httpListPageData(html))
-      }
-    }
-  })
 })
 
 // 爬取列表页面数据
 httpListPageData = (html) => {
   try {
+    if (pageCnt > MAX_DATA_PAGE) {
+      return
+    }
 
+    console.log(`开始爬取第${pageCnt}页数据`)
     const $ = cheerio.load(html)
 
     // 爬取当页对象取得
-    const targets = $(
-      '.Products__items .Product .Product__detail .Product__title .Product__titleLink'
-    )
-    // 爬取对象循环
-    targets.each(async (i, el) => {
-      // console.log($(this).attr('title') + ' ' + $(this).attr('href'))
-      // 获取详细URL
-      const detailURL = el.attribs.href
-      if (detailURL) {
-        // 请求详细页面
-        const detailHTML = await httpGet(detailURL)
-        // 解析详细页面, 获取结果
-        const data = httpDetailPageData(detailHTML, detailURL)
-        // 写入文件
-        writeData(data)
-      }
-    })
+    if (GET_DATA_SWICH) {
+      const targets = $(
+        '.Products__items .Product .Product__detail .Product__title .Product__titleLink'
+      )
+      // 爬取对象循环
+      targets.each(async (i, el) => {
+        // console.log($(this).attr('title') + ' ' + $(this).attr('href'))
+        // 获取详细URL
+        const detailURL = el.attribs.href
+        if (detailURL) {
+          // 请求详细页面
+          const detailHTML = await httpGet(detailURL)
+          // 解析详细页面, 获取结果
+          const data = httpDetailPageData(detailHTML, detailURL)
+          // 写入文件
+          writeData(data)
+        }
+      })
+    }
 
-    // 爬取下一页数据
-    
+    // 获取下一页链接
+    const nextBtn = $('.Pager__list--next .Pager__link--disable')
+
+    if (nextBtn.length > 0) {
+      // 下一页按钮不可用,爬取结束
+      return
+    } else {
+      // 获取下一页URL
+      const nextURL = $('.Pager__list--next a').attr('href')
+      console.log(nextURL)
+
+      pageCnt++
+
+      // 开始爬取下一页数据
+      httpGet(nextURL).then((html) => httpListPageData(html))
+    }
   } catch (e) {
     console.error(e.message)
   }
 }
 
+// 写出数据
 writeData = (data) => {
-  var dataStr = Object.keys(data).map(p => data[p]).join(',') + '\n'
+  var dataStr =
+    Object.keys(data)
+      .map((p) => data[p])
+      .join(',') + '\n'
   fs.appendFile('data.csv', dataStr, (err) => {
     if (err) throw err
   })
@@ -113,7 +127,22 @@ httpDetailPageData = (html, url) => {
   const priceNowIdx = priceNowText.indexOf('円')
   const priceNow = priceNowText.substring(0, priceNowIdx).replace(',', '')
 
-  const priceStart = $('.ProductDetail__description').text()
+  const priceStart = 0
+  const descpTitles = $('.ProductDetail__item .ProductDetail__title')
+  descpTitles.each((i, el) => {
+    if (el.childNodes[0].data === '開始価格') {
+      try {
+        const startPriceText = el.parentNode.children[3].children[1].data
+        const startPriceIdx = startPriceText.indexOf('円')
+        priceStart = startPriceText
+          .substring(0, startPriceIdx)
+          .replace(',', '')
+          .trim()
+      } catch (e) {
+      }
+  }
+  })
+
   const sendPrice = $('.Price__postageValue').text()
   let category = []
   let status = ''
@@ -135,7 +164,7 @@ httpDetailPageData = (html, url) => {
     productName,
     cnumber,
     priceNow,
-    //priceStart,
+    priceStart,
     //sendPrice,
     category,
     status,
